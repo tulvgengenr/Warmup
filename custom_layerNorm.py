@@ -5,6 +5,7 @@ import torch.nn as nn
 import numpy as np
 import time
 import mylayerNorm_cuda
+from torch.profiler import profile
 
 class myLayerNormFunction(torch.autograd.Function):
     # Note that both forward and backward are @staticmethods
@@ -45,22 +46,49 @@ def verify(device):
     torch_time = []
     for _ in range(test_cnt+10):
         in_t = torch.rand(size=(64, 128)).to(device)
+
         # my layerNorm
         start_time = time.time()
-        out_my = my_layerNorm(in_t)
-        torch.cuda.synchronize(device)
+
+        with profile(
+            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
+            record_shapes=True, 
+            with_stack=True, 
+            profile_memory=True,
+            with_modules=True,
+            with_flops=True,
+            ) as prof1:
+            out_my = my_layerNorm(in_t)
+            torch.cuda.synchronize(device)
+
         end_time = time.time()
         my_time.append(end_time-start_time)
 
+
         # torch layerNorm
         start_time = time.time()
-        out_torch = torch_layerNorm(in_t)
-        torch.cuda.synchronize(device)
+
+        with profile(
+            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
+            record_shapes=True, 
+            with_stack=True, 
+            profile_memory=True,
+            with_modules=True,
+            with_flops=True,
+            ) as prof2:
+            out_torch = torch_layerNorm(in_t)
+            torch.cuda.synchronize(device)
+
         end_time = time.time()
         torch_time.append(end_time-start_time)
-
+    
     print(f'My LayerNorm forward avg time: {sum(my_time[10:])/test_cnt}s')
     print(f'PyTorch LayerNorm forward avg time: {sum(torch_time[10:])/test_cnt}s')
+
+    print(prof1.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+    print(prof2.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+    prof1.export_chrome_trace("profile/my_layerNorm_forward.json")
+    prof2.export_chrome_trace("profile/torch_layerNorm_forward.json")
     
 def verify_backward(device):
     test_cnt = 100
@@ -88,30 +116,59 @@ def verify_backward(device):
     my_time = []
     torch_time = [] 
     for _ in range(test_cnt+10):
+        
         in_t_my = torch.rand(size=(64, 128), requires_grad=True).to(device)
         in_t_torch = in_t_my.clone().detach().requires_grad_(True).to(device)
 
+        # torch layernorm
         out_torch = torch_layerNorm(in_t_torch)
         target_torch = torch.ones_like(out_torch)
         loss_torch = loss_fn(out_torch, target_torch)
+
         start_time = time.time()
-        grad_in_t_torch = torch.autograd.grad(loss_torch, in_t_torch, retain_graph=True)[0]
-        torch.cuda.synchronize(device)
+
+        with profile(
+            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
+            record_shapes=True, 
+            with_stack=True, 
+            profile_memory=True,
+            with_modules=True,
+            with_flops=True,
+            ) as prof4:
+            grad_in_t_torch = torch.autograd.grad(loss_torch, in_t_torch, retain_graph=True)[0]
+            torch.cuda.synchronize(device)
+
         end_time = time.time()
         torch_time.append(end_time-start_time)
 
+
+        # my layernorm
         out_my = my_layerNorm(in_t_my)
         target_my = torch.ones_like(out_my)
         loss_my = loss_fn(out_my, target_my)
         start_time = time.time()
-        grad_in_t_my = torch.autograd.grad(loss_my, in_t_my, retain_graph=True)[0]
-        torch.cuda.synchronize(device)
+
+        with profile(
+            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
+            record_shapes=True, 
+            with_stack=True, 
+            profile_memory=True,
+            with_modules=True,
+            with_flops=True,
+            ) as prof3:
+            grad_in_t_my = torch.autograd.grad(loss_my, in_t_my, retain_graph=True)[0]
+            torch.cuda.synchronize(device)
+        
         end_time = time.time()
         my_time.append(end_time-start_time)
 
     print(f'My LayerNorm backward avg time: {sum(my_time[10:])/test_cnt}s')
     print(f'PyTorch LayerNorm backward avg time: {sum(torch_time[10:])/test_cnt}s')
-
+    
+    print(prof3.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+    print(prof4.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+    prof3.export_chrome_trace("profile/my_layerNorm_backward.json")
+    prof4.export_chrome_trace("profile/torch_layerNorm_backward.json")
 
 
 def main():
