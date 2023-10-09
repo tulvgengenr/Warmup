@@ -31,7 +31,7 @@ class myLayerNorm(nn.Module):
     def forward(self, input):
         return myLayerNormFunction.apply(input)
 
-def verify(device):
+def verify(device, is_profile):
     test_cnt = 100
     my_layerNorm = myLayerNorm().to(device)
     torch_layerNorm = nn.LayerNorm(normalized_shape=(128), elementwise_affine=False, eps=1e-5).to(device)
@@ -50,14 +50,18 @@ def verify(device):
         # my layerNorm
         start_time = time.time()
 
-        with profile(
-            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
-            record_shapes=True, 
-            with_stack=True, 
-            profile_memory=True,
-            with_modules=True,
-            with_flops=True,
-            ) as prof1:
+        if is_profile:
+            with profile(
+                activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
+                record_shapes=True, 
+                with_stack=True, 
+                profile_memory=True,
+                with_modules=True,
+                with_flops=True,
+                ) as prof1:
+                out_my = my_layerNorm(in_t)
+                torch.cuda.synchronize(device)
+        else:
             out_my = my_layerNorm(in_t)
             torch.cuda.synchronize(device)
 
@@ -68,14 +72,18 @@ def verify(device):
         # torch layerNorm
         start_time = time.time()
 
-        with profile(
-            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
-            record_shapes=True, 
-            with_stack=True, 
-            profile_memory=True,
-            with_modules=True,
-            with_flops=True,
-            ) as prof2:
+        if is_profile:
+            with profile(
+                activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
+                record_shapes=True, 
+                with_stack=True, 
+                profile_memory=True,
+                with_modules=True,
+                with_flops=True,
+                ) as prof2:
+                out_torch = torch_layerNorm(in_t)
+                torch.cuda.synchronize(device)
+        else:
             out_torch = torch_layerNorm(in_t)
             torch.cuda.synchronize(device)
 
@@ -85,12 +93,13 @@ def verify(device):
     print(f'My LayerNorm forward avg time: {sum(my_time[10:])/test_cnt}s')
     print(f'PyTorch LayerNorm forward avg time: {sum(torch_time[10:])/test_cnt}s')
 
-    print(prof1.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-    print(prof2.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-    prof1.export_chrome_trace("profile/my_layerNorm_forward.json")
-    prof2.export_chrome_trace("profile/torch_layerNorm_forward.json")
+    if is_profile:
+        print(prof1.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+        print(prof2.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+        prof1.export_chrome_trace("profile/my_layerNorm_forward.json")
+        prof2.export_chrome_trace("profile/torch_layerNorm_forward.json")
     
-def verify_backward(device):
+def verify_backward(device, is_profile):
     test_cnt = 100
     my_layerNorm = myLayerNorm().to(device)
     torch_layerNorm = nn.LayerNorm(normalized_shape=(128), elementwise_affine=False, eps=1e-5).to(device)
@@ -126,15 +135,19 @@ def verify_backward(device):
         loss_torch = loss_fn(out_torch, target_torch)
 
         start_time = time.time()
-
-        with profile(
-            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
-            record_shapes=True, 
-            with_stack=True, 
-            profile_memory=True,
-            with_modules=True,
-            with_flops=True,
-            ) as prof4:
+        
+        if is_profile:
+            with profile(
+                activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
+                record_shapes=True, 
+                with_stack=True, 
+                profile_memory=True,
+                with_modules=True,
+                with_flops=True,
+                ) as prof4:
+                grad_in_t_torch = torch.autograd.grad(loss_torch, in_t_torch, retain_graph=True)[0]
+                torch.cuda.synchronize(device)
+        else:
             grad_in_t_torch = torch.autograd.grad(loss_torch, in_t_torch, retain_graph=True)[0]
             torch.cuda.synchronize(device)
 
@@ -148,14 +161,18 @@ def verify_backward(device):
         loss_my = loss_fn(out_my, target_my)
         start_time = time.time()
 
-        with profile(
-            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
-            record_shapes=True, 
-            with_stack=True, 
-            profile_memory=True,
-            with_modules=True,
-            with_flops=True,
-            ) as prof3:
+        if is_profile:
+            with profile(
+                activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
+                record_shapes=True, 
+                with_stack=True, 
+                profile_memory=True,
+                with_modules=True,
+                with_flops=True,
+                ) as prof3:
+                grad_in_t_my = torch.autograd.grad(loss_my, in_t_my, retain_graph=True)[0]
+                torch.cuda.synchronize(device)
+        else:
             grad_in_t_my = torch.autograd.grad(loss_my, in_t_my, retain_graph=True)[0]
             torch.cuda.synchronize(device)
         
@@ -164,11 +181,12 @@ def verify_backward(device):
 
     print(f'My LayerNorm backward avg time: {sum(my_time[10:])/test_cnt}s')
     print(f'PyTorch LayerNorm backward avg time: {sum(torch_time[10:])/test_cnt}s')
-    
-    print(prof3.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-    print(prof4.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-    prof3.export_chrome_trace("profile/my_layerNorm_backward.json")
-    prof4.export_chrome_trace("profile/torch_layerNorm_backward.json")
+
+    if is_profile:
+        print(prof3.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+        print(prof4.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+        prof3.export_chrome_trace("profile/my_layerNorm_backward.json")
+        prof4.export_chrome_trace("profile/torch_layerNorm_backward.json")
 
 
 def main():
@@ -176,12 +194,15 @@ def main():
     parser = argparse.ArgumentParser(description='LayerNorm Example')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
+    parser.add_argument('--profile', action='store_true', default=False,
+                    help='profile the LayerNorm Operation')
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
+    is_profile = args.profile
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    verify(device)
-    verify_backward(device)
+    verify(device, is_profile)
+    verify_backward(device, is_profile)
 
 if __name__ == '__main__':
     main()
